@@ -26,6 +26,10 @@ Notas de mapeo a res.partner:
     (importación)            -> res_partner.is_company = TRUE
     (importación)            -> res_partner.active = TRUE  (no se cargan archivados)
     (importación)            -> res_partner.{DGII_LOADED_FIELD} = TRUE  ("Cargado desde DGII")
+    DGII actividad_economica      ─┐
+    DGII fecha_inicio_operaciones ─┴──> res_partner.comment (Notas internas),
+    DGII estado                       en bloque "[DGII]" con formato
+    DGII regimen_pago                 "Etiqueta: Valor" (una línea por campo)
 
 (*) `commercial_name` no viene en el CSV DGII, pero la columna se conserva
     en la tabla de staging para posibles extensiones futuras.
@@ -65,6 +69,19 @@ TARGET_TABLE = "res_partner"
 # partners cargados por este script (etiqueta en Odoo: "Cargado desde DGII").
 # En Odoo, los campos personalizados usan típicamente el prefijo `x_`.
 DGII_LOADED_FIELD = "x_cargado_desde_dgii"
+
+# Columnas DGII adicionales que se persisten en `res_partner.comment`
+# (Notas internas) en formato "Etiqueta: Valor". Cada tupla es
+# (clave_csv, etiqueta_legible). El orden aquí define el orden en el bloque.
+DGII_COMMENT_FIELDS = (
+    ("actividad_economica",      "Actividad Económica"),
+    ("fecha_inicio_operaciones", "Fecha Inicio Operaciones"),
+    ("estado",                   "Estado"),
+    ("regimen_pago",             "Régimen de Pago"),
+)
+# Marcador del bloque DGII dentro de comment; permite identificar/reemplazar
+# el bloque en re-ejecuciones sin duplicar ni pisar notas del usuario.
+DGII_COMMENT_MARKER = "[DGII]"
 # Columnas reales del CSV DGII (orden observado en documentación)
 DGII_COLUMNS = (
     "rnc",
@@ -401,7 +418,10 @@ def map_columns(headers: list[str]) -> dict[str, int]:
 
 
 def iter_rows(path: Path, mapping: dict[str, int], encoding: str) -> Iterator[tuple]:
-    """Genera tuplas (rnc, name, economic_activity, state) por cada fila."""
+    """Genera tuplas por cada fila con todos los campos DGII mapeados:
+    (rnc, name, commercial_name, economic_activity, state,
+     fecha_inicio_operaciones, regimen_pago).
+    """
     with open(path, "r", encoding=encoding, errors="replace", newline="") as f:
         reader = csv.reader(f)
         try:
@@ -425,28 +445,91 @@ def iter_rows(path: Path, mapping: dict[str, int], encoding: str) -> Iterator[tu
             state = (
                 row[col_map["estado"]] if "estado" in col_map else ""
             ).strip()
+            fecha_inicio = (
+                row[col_map["fecha_inicio_operaciones"]]
+                if "fecha_inicio_operaciones" in col_map
+                else ""
+            ).strip()
+            regimen = (
+                row[col_map["regimen_pago"]] if "regimen_pago" in col_map else ""
+            ).strip()
             # commercial_name, address, phone, email no vienen en el CSV
-            yield (rnc, name or None, None, activity or None, state or None)
+            yield (
+                rnc,
+                name or None,
+                None,                     # commercial_name placeholder
+                activity or None,
+                state or None,
+                fecha_inicio or None,
+                regimen or None,
+            )
 
 
 DDL_STAGING = f"""
 DROP TABLE IF EXISTS {STAGING_TABLE};
 CREATE TABLE {STAGING_TABLE} (
-    rnc                   TEXT,
-    name                  TEXT,
-    commercial_name       TEXT,
-    economic_activity     TEXT,
-    state                 TEXT
+    rnc                      TEXT,
+    name                     TEXT,
+    commercial_name          TEXT,
+    economic_activity        TEXT,
+    state                    TEXT,
+    fecha_inicio_operaciones TEXT,
+    regimen_pago             TEXT
 );
 CREATE INDEX ON {STAGING_TABLE} (rnc);
 """
 
+
+def _dgii_comment_sql(staging_alias: str = "s") -> str:
+    """Devuelve una expresión SQL que construye el bloque [DGII] para
+    `res_partner.comment` con formato "Etiqueta: Valor".
+
+    El bloque tiene esta forma:
+        [DGII]
+        Actividad Económica: <valor>
+        Fecha Inicio Operaciones: <valor>
+        Estado: <valor>
+        Régimen de Pago: <valor>
+
+    Las líneas con valor vacío o NULL se omiten automáticamente
+    (NULLIF sobre 'Etiqueta: '). Si todos los valores están vacíos,
+    el bloque se reduce al marcador solo.
+
+    `staging_alias` es el alias SQL de la tabla staging en el FROM
+    (por defecto 's').
+    """
+    parts = [f"  '{DGII_COMMENT_MARKER}'"]
+    # Mapeo columna_staging → etiqueta. Usamos los nombres canónicos
+    # del CSV (que coinciden con los nuevos nombres de columna staging).
+    staging_col_for = {
+        "actividad_economica":      "economic_activity",
+        "fecha_inicio_operaciones": "fecha_inicio_operaciones",
+        "estado":                   "state",
+        "regimen_pago":             "regimen_pago",
+    }
+    for csv_key, label in DGII_COMMENT_FIELDS:
+        col = staging_col_for[csv_key]
+        # NULLIF sobre la concatenación descarta la línea si el valor está vacío.
+        parts.append(
+            f"  NULLIF('{label}: ' || NULLIF({staging_alias}.{col}, ''),"
+            f" '{label}: ')"
+        )
+    return "CONCAT_WS(E'\\n',\n" + ",\n".join(parts) + "\n)"
+
+
 # res.partner NO se trunca: contiene datos de usuarios. Se hace
 # upsert por coincidencia de vat (= rnc del CSV).
+DGII_COMMENT_EXPR = _dgii_comment_sql("s")
+
 UPDATE_SQL = f"""
 UPDATE {TARGET_TABLE} rp
 SET name              = s.name,
     company_name      = COALESCE(NULLIF(s.commercial_name, ''), rp.company_name),
+    comment           = CASE
+        WHEN rp.{DGII_LOADED_FIELD} = TRUE THEN rp.comment
+        WHEN rp.comment IS NULL OR rp.comment = '' THEN {DGII_COMMENT_EXPR}
+        ELSE rp.comment || E'\\n\\n' || {DGII_COMMENT_EXPR}
+    END,
     {DGII_LOADED_FIELD} = TRUE
 FROM {STAGING_TABLE} s
 WHERE rp.vat = s.rnc
@@ -455,12 +538,14 @@ WHERE rp.vat = s.rnc
 """
 
 INSERT_SQL = f"""
-INSERT INTO {TARGET_TABLE} (vat, name, company_name, is_company, active, {DGII_LOADED_FIELD})
+INSERT INTO {TARGET_TABLE}
+    (vat, name, company_name, is_company, active, comment, {DGII_LOADED_FIELD})
 SELECT s.rnc,
        s.name,
        NULLIF(s.commercial_name, ''),
        TRUE,
        TRUE,
+       {DGII_COMMENT_EXPR},
        TRUE
 FROM {STAGING_TABLE} s
 WHERE s.rnc IS NOT NULL
@@ -512,7 +597,9 @@ def copy_rows_to_staging(cur, rows: Iterable[tuple]) -> int:
     log.info("COPY %d filas a %s", count, STAGING_TABLE)
     if count > 0:
         cur.copy_expert(
-            f"COPY {STAGING_TABLE} (rnc, name, commercial_name, economic_activity, state) "
+            f"COPY {STAGING_TABLE} "
+            "(rnc, name, commercial_name, economic_activity, state, "
+            "fecha_inicio_operaciones, regimen_pago) "
             "FROM STDIN WITH (FORMAT text, DELIMITER E'\\t', NULL '')",
             buf,
         )
