@@ -6,7 +6,7 @@
 # =============================================================================
 #   Pasos:
 # Variables de entorno (o exportadas en el shell)
-export PGHOST=192.168.16.80
+export PGHOST=192.168.16.82
 export PGPORT=5432
 export PGDATABASE=db_test_imp_rnc
 export PGUSER=odoo18
@@ -29,7 +29,7 @@ ADDONS_DIR="$( dirname "$SCRIPT_DIR" )"
 : "${PYTHON_BIN:=python3}"
 
 # Conexión PostgreSQL (exportadas para que import_rnc.py las consuma)
-: "${PGHOST:=192.168.16.80}"
+: "${PGHOST:=192.168.16.82}"
 : "${PGPORT:=5432}"
 : "${PGDATABASE:=db_test_imp_rnc}"
 : "${PGUSER:=odoo18}"
