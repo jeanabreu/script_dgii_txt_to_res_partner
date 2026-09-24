@@ -6,18 +6,27 @@ import_rnc.py
 
 Descarga el archivo oficial de contribuyentes DGII República Dominicana
 (RNC_CONTRIBUYENTES.zip), lo descomprime, lo carga a una tabla de staging
-en PostgreSQL y hace upsert masivo en la tabla `gs_taxpayer` del módulo
-Odoo `gs_master_data`.
+en PostgreSQL y hace upsert masivo en la tabla `res_partner` del modelo
+Odoo `res.partner`.
 
 Uso:
     ./import_rnc.sh
 o
-    python3 import_rnc.py [--skip-download] [--no-truncate] [--dry-run]
+    python3 import_rnc.py [--skip-download] [--dry-run]
 
 Variables de entorno:
     PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD
     DATA_DIR (default: /opt/containers_files/odooapi/extra-addons/gs_master_data/data)
     RNC_URL  (default: https://dgii.gov.do/app/WebApps/Consultas/RNC/RNC_CONTRIBUYENTES.zip)
+
+Notas de mapeo a res.partner:
+    DGII razon_social        -> res_partner.name
+    DGII rnc                 -> res_partner.vat
+    DGII commercial_name (*) -> res_partner.company_name
+    (importación)            -> res_partner.is_company = TRUE
+
+(*) `commercial_name` no viene en el CSV DGII, pero la columna se conserva
+    en la tabla de staging para posibles extensiones futuras.
 """
 
 from __future__ import annotations
@@ -48,8 +57,8 @@ DEFAULT_URL = (
     "https://dgii.gov.do/app/WebApps/Consultas/RNC/RNC_CONTRIBUYENTES.zip"
 )
 ZIP_NAME = "RNC_CONTRIBUYENTES.zip"
-STAGING_TABLE = "gs_taxpayer_rnc_staging"
-TARGET_TABLE = "gs_taxpayer"
+STAGING_TABLE = "res_partner_rnc_staging"
+TARGET_TABLE = "res_partner"
 # Columnas reales del CSV DGII (orden observado en documentación)
 DGII_COLUMNS = (
     "rnc",
@@ -88,16 +97,11 @@ DEFAULT_USER_AGENT = (
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Importador RNC DGII → Odoo gs_taxpayer")
+    parser = argparse.ArgumentParser(description="Importador RNC DGII → Odoo res.partner")
     parser.add_argument(
         "--skip-download",
         action="store_true",
         help="No descarga si el ZIP ya existe localmente.",
-    )
-    parser.add_argument(
-        "--no-truncate",
-        action="store_true",
-        help="NO vacía la tabla gs_taxpayer antes del upsert (default: truncate).",
     )
     parser.add_argument(
         "--dry-run",
@@ -431,34 +435,31 @@ CREATE TABLE {STAGING_TABLE} (
 CREATE INDEX ON {STAGING_TABLE} (rnc);
 """
 
-DDL_TRUNCATE = f"TRUNCATE TABLE {TARGET_TABLE} RESTART IDENTITY;"
+# res.partner NO se trunca: contiene datos de usuarios. Se hace
+# upsert por coincidencia de vat (= rnc del CSV).
+UPDATE_SQL = f"""
+UPDATE {TARGET_TABLE} rp
+SET name         = s.name,
+    company_name = COALESCE(NULLIF(s.commercial_name, ''), rp.company_name)
+FROM {STAGING_TABLE} s
+WHERE rp.vat = s.rnc
+  AND s.rnc IS NOT NULL
+  AND length(trim(s.rnc)) > 0;
+"""
 
-UPSERT_SQL = f"""
-INSERT INTO {TARGET_TABLE} (
-    rnc,
-    name,
-    commercial_name,
-    state,
-    economic_activity,
-    electronic_invoice,
-    last_update
-)
-SELECT
-    rnc,
-    name,
-    commercial_name,
-    state,
-    economic_activity,
-    FALSE,
-    NOW()
-FROM {STAGING_TABLE}
-WHERE rnc IS NOT NULL AND length(trim(rnc)) > 0
-ON CONFLICT (rnc) DO UPDATE SET
-    name                = EXCLUDED.name,
-    commercial_name     = COALESCE(EXCLUDED.commercial_name, {TARGET_TABLE}.commercial_name),
-    state               = EXCLUDED.state,
-    economic_activity   = EXCLUDED.economic_activity,
-    last_update         = NOW();
+INSERT_SQL = f"""
+INSERT INTO {TARGET_TABLE} (vat, name, company_name, is_company)
+SELECT s.rnc,
+       s.name,
+       NULLIF(s.commercial_name, ''),
+       TRUE
+FROM {STAGING_TABLE} s
+WHERE s.rnc IS NOT NULL
+  AND length(trim(s.rnc)) > 0
+  AND NOT EXISTS (
+      SELECT 1 FROM {TARGET_TABLE} rp WHERE rp.vat = s.rnc
+  )
+RETURNING id;
 """
 
 
@@ -493,23 +494,34 @@ def copy_rows_to_staging(cur, rows: Iterable[tuple]) -> int:
 
 
 def run_upsert(cur) -> tuple[int, int]:
-    """Ejecuta el upsert. Devuelve (inserts, updates)."""
+    """Ejecuta el upsert. Devuelve (inserts, updates).
+
+    Estrategia:
+      1. UPDATE de partners existentes cuyo `vat` coincide con un rnc del CSV.
+      2. INSERT de los partners nuevos (los que no existen por `vat`).
+    En ambos casos se respeta la información que el usuario haya podido
+    cargar manualmente (no se sobreescriben campos personalizados).
+    """
     log.info("Ejecutando UPSERT a %s ...", TARGET_TABLE)
-    # Antes de upsert contamos staging para reportar
     cur.execute(f"SELECT count(*) FROM {STAGING_TABLE}")
     staging_count = cur.fetchone()[0]
-    cur.execute(UPSERT_SQL)
-    upserted = cur.rowcount
-    # Aproximación: inserts = staging - (los que ya existían antes)
+
+    # 1) UPDATE existentes
+    cur.execute(UPDATE_SQL)
+    updated = cur.rowcount
+    log.info("UPDATE %s: %d filas actualizadas", TARGET_TABLE, updated)
+
+    # 2) INSERT nuevos
+    cur.execute(INSERT_SQL)
+    inserted_rows = cur.fetchall()
+    inserted = len(inserted_rows)
+    log.info("INSERT %s: %d filas nuevas", TARGET_TABLE, inserted)
+
     cur.execute(f"SELECT count(*) FROM {TARGET_TABLE}")
     final_count = cur.fetchone()[0]
-    inserted = max(0, final_count - (cur.execute(
-        f"SELECT count(*) FROM {TARGET_TABLE} WHERE rnc IN (SELECT rnc FROM {STAGING_TABLE})"
-    ) or 0))
-    updates = max(0, upserted - inserted)
-    log.info("UPSERT OK. staging=%d, upsert_rowcount=%d, total_final=%d",
-             staging_count, upserted, final_count)
-    return inserted, updates
+    log.info("UPSERT OK. staging=%d, inserted=%d, updated=%d, total_final=%d",
+             staging_count, inserted, updated, final_count)
+    return inserted, updated
 
 
 # -----------------------------------------------------------------------------
@@ -563,16 +575,12 @@ def main() -> int:
             log.info("Filas leídas del archivo: %d", total_rows)
 
             if args.dry_run:
-                log.info("--dry-run activo: no se ejecuta truncate ni upsert.")
+                log.info("--dry-run activo: no se ejecuta el upsert final.")
                 conn.commit()
                 return 0
 
-            # 6) Truncate opcional antes del upsert
-            if not args.no_truncate:
-                log.info("Truncando %s ...", TARGET_TABLE)
-                cur.execute(DDL_TRUNCATE)
-
-            # 7) Upsert
+            # 6) Upsert a res.partner (sin truncate: la tabla contiene
+            # datos de usuario; se hace UPDATE + INSERT por vat)
             inserted, updated = run_upsert(cur)
 
         conn.commit()
