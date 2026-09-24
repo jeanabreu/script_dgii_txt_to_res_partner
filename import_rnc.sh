@@ -5,7 +5,12 @@
 # Python de contribuyentes DGII hacia Odoo (res.partner).
 # =============================================================================
 #   Pasos:
-#   export PGHOST=localhost PGPORT=5432 PGDATABASE=odoo17 PGUSER=odoo PGPASSWORD='***'
+# Variables de entorno (o exportadas en el shell)
+export PGHOST=192.168.16.80
+export PGPORT=5432
+export PGDATABASE=db_test_imp_rnc
+export PGUSER=odoo18
+export PGPASSWORD='dbprd01'
 #   ./scripts/import_rnc.sh
 #   Reutilizando ZIP ya descargado
 #   ./scripts/import_rnc.sh --skip-download
@@ -19,15 +24,15 @@ set -euo pipefail
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 ADDONS_DIR="$( dirname "$SCRIPT_DIR" )"
 
-: "${DATA_DIR:=/opt/containers_files/odooapi/extra-addons/gs_master_data/data}"
+: "${DATA_DIR:=/tmp/data}"
 : "${RNC_URL:=https://dgii.gov.do/app/WebApps/Consultas/RNC/RNC_CONTRIBUYENTES.zip}"
 : "${PYTHON_BIN:=python3}"
 
 # Conexión PostgreSQL (exportadas para que import_rnc.py las consuma)
-: "${PGHOST:=15.204.246.110}"
-: "${PGPORT:=6475}"
-: "${PGDATABASE:=api.coolify.gestionsimple.com}"
-: "${PGUSER:=odooapi}"
+: "${PGHOST:=192.168.16.80}"
+: "${PGPORT:=5432}"
+: "${PGDATABASE:=db_test_imp_rnc}"
+: "${PGUSER:=odoo18}"
 # PGPASSWORD puede no estar definida. Si lo está, se exporta.
 if [[ -n "${PGPASSWORD:-}" ]]; then
     export PGPASSWORD
