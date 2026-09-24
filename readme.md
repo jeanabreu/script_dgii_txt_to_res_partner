@@ -37,11 +37,11 @@ por compatibilidad/extensión futura.
 
 ```bash
 # Variables de entorno (o exportadas en el shell)
-export PGHOST=15.204.246.110
-export PGPORT=6475
-export PGDATABASE=api.coolify.gestionsimple.com
-export PGUSER=odooapi
-export PGPASSWORD='***'
+export PGHOST=192.168.16.80
+export PGPORT=5432
+export PGDATABASE=db_test_imp_rnc
+export PGUSER=odoo18
+export PGPASSWORD='dbprd01'
 
 # Ejecutar
 ./import_rnc.sh
@@ -57,12 +57,12 @@ export PGPASSWORD='***'
 
 | Variable      | Default                                                                            |
 | ------------- | ---------------------------------------------------------------------------------- |
-| `PGHOST`      | `15.204.246.110`                                                                   |
-| `PGPORT`      | `6475`                                                                             |
-| `PGDATABASE`  | `api.coolify.gestionsimple.com`                                                    |
-| `PGUSER`      | `odooapi`                                                                          |
-| `PGPASSWORD`  | _(vacía)_                                                                          |
-| `DATA_DIR`    | `/opt/containers_files/odooapi/extra-addons/gs_master_data/data`                   |
+| `PGHOST`      | `192.168.16.80`                                                                    |
+| `PGPORT`      | `5432`                                                                             |
+| `PGDATABASE`  | `db_test_imp_rnc`                                                    |
+| `PGUSER`      | `odoo18`                                                                          |
+| `PGPASSWORD`  | `dbprd01`                                                                          |
+| `DATA_DIR`    | `/tmp/data`                   |
 | `RNC_URL`     | `https://dgii.gov.do/app/WebApps/Consultas/RNC/RNC_CONTRIBUYENTES.zip`             |
 | `RNC_USER_AGENT` | UA de navegador (DGII bloquea el UA por defecto de `python-requests`)           |
 
