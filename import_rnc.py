@@ -482,14 +482,15 @@ CREATE INDEX ON {STAGING_TABLE} (rnc);
 
 def _dgii_comment_sql(staging_alias: str = "s") -> str:
     """Devuelve una expresión SQL que construye el bloque [DGII] para
-    `res_partner.comment` con formato "Etiqueta: Valor".
+    `res_partner.comment` con formato "Etiqueta: Valor" y un salto de
+    línea (`E'\\n'`) después de cada campo.
 
     El bloque tiene esta forma:
-        [DGII]
-        Actividad Económica: <valor>
-        Fecha Inicio Operaciones: <valor>
-        Estado: <valor>
-        Régimen de Pago: <valor>
+        [DGII]\\n
+        Actividad Económica: <valor>\\n
+        Fecha Inicio Operaciones: <valor>\\n
+        Estado: <valor>\\n
+        Régimen de Pago: <valor>\\n
 
     Las líneas con valor vacío o NULL se omiten automáticamente
     (NULLIF sobre 'Etiqueta: '). Si todos los valores están vacíos,
@@ -498,7 +499,7 @@ def _dgii_comment_sql(staging_alias: str = "s") -> str:
     `staging_alias` es el alias SQL de la tabla staging en el FROM
     (por defecto 's').
     """
-    parts = [f"  '{DGII_COMMENT_MARKER}'"]
+    parts = [f"  '{DGII_COMMENT_MARKER}\\n'"]
     # Mapeo columna_staging → etiqueta. Usamos los nombres canónicos
     # del CSV (que coinciden con los nuevos nombres de columna staging).
     staging_col_for = {
@@ -510,11 +511,12 @@ def _dgii_comment_sql(staging_alias: str = "s") -> str:
     for csv_key, label in DGII_COMMENT_FIELDS:
         col = staging_col_for[csv_key]
         # NULLIF sobre la concatenación descarta la línea si el valor está vacío.
+        # Se concatena E'\n' al final para dejar un salto de línea tras cada campo.
         parts.append(
-            f"  NULLIF('{label}: ' || NULLIF({staging_alias}.{col}, ''),"
-            f" '{label}: ')"
+            f"  (NULLIF('{label}: ' || NULLIF({staging_alias}.{col}, ''),"
+            f" '{label}: ') || E'\\n')"
         )
-    return "CONCAT_WS(E'\\n',\n" + ",\n".join(parts) + "\n)"
+    return "CONCAT(\n" + ",\n".join(parts) + "\n)"
 
 
 # res.partner NO se trunca: contiene datos de usuarios. Se hace
