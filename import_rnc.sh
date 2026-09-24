@@ -2,7 +2,7 @@
 # =============================================================================
 # import_rnc.sh
 # Wrapper bash que prepara variables de entorno y ejecuta el importador
-# Python de contribuyentes DGII hacia Odoo (gs.taxpayer).
+# Python de contribuyentes DGII hacia Odoo (res.partner).
 # =============================================================================
 #   Pasos:
 #   export PGHOST=localhost PGPORT=5432 PGDATABASE=odoo17 PGUSER=odoo PGPASSWORD='***'
