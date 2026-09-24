@@ -24,6 +24,8 @@ Notas de mapeo a res.partner:
     DGII rnc                 -> res_partner.vat
     DGII commercial_name (*) -> res_partner.company_name
     (importación)            -> res_partner.is_company = TRUE
+    (importación)            -> res_partner.active = TRUE  (no se cargan archivados)
+    (importación)            -> res_partner.{DGII_LOADED_FIELD} = TRUE  ("Cargado desde DGII")
 
 (*) `commercial_name` no viene en el CSV DGII, pero la columna se conserva
     en la tabla de staging para posibles extensiones futuras.
@@ -59,6 +61,10 @@ DEFAULT_URL = (
 ZIP_NAME = "RNC_CONTRIBUYENTES.zip"
 STAGING_TABLE = "res_partner_rnc_staging"
 TARGET_TABLE = "res_partner"
+# Nombre técnico de la columna booleana en res_partner que marca los
+# partners cargados por este script (etiqueta en Odoo: "Cargado desde DGII").
+# En Odoo, los campos personalizados usan típicamente el prefijo `x_`.
+DGII_LOADED_FIELD = "x_cargado_desde_dgii"
 # Columnas reales del CSV DGII (orden observado en documentación)
 DGII_COLUMNS = (
     "rnc",
@@ -439,8 +445,9 @@ CREATE INDEX ON {STAGING_TABLE} (rnc);
 # upsert por coincidencia de vat (= rnc del CSV).
 UPDATE_SQL = f"""
 UPDATE {TARGET_TABLE} rp
-SET name         = s.name,
-    company_name = COALESCE(NULLIF(s.commercial_name, ''), rp.company_name)
+SET name              = s.name,
+    company_name      = COALESCE(NULLIF(s.commercial_name, ''), rp.company_name),
+    {DGII_LOADED_FIELD} = TRUE
 FROM {STAGING_TABLE} s
 WHERE rp.vat = s.rnc
   AND s.rnc IS NOT NULL
@@ -448,10 +455,12 @@ WHERE rp.vat = s.rnc
 """
 
 INSERT_SQL = f"""
-INSERT INTO {TARGET_TABLE} (vat, name, company_name, is_company)
+INSERT INTO {TARGET_TABLE} (vat, name, company_name, is_company, active, {DGII_LOADED_FIELD})
 SELECT s.rnc,
        s.name,
        NULLIF(s.commercial_name, ''),
+       TRUE,
+       TRUE,
        TRUE
 FROM {STAGING_TABLE} s
 WHERE s.rnc IS NOT NULL
@@ -466,6 +475,23 @@ RETURNING id;
 def ensure_staging_table(cur) -> None:
     log.info("Creando/limpiando tabla staging %s", STAGING_TABLE)
     cur.execute(DDL_STAGING)
+
+
+def ensure_dgii_loaded_column(cur) -> None:
+    """Asegura que la columna booleana del flag 'Cargado desde DGII' exista
+    en `res_partner`. La crea como `BOOLEAN DEFAULT FALSE` si no existe.
+
+    Esto permite ejecutar el script contra bases que aún no tienen el
+    campo personalizado sin necesidad de hacerlo manualmente. El default
+    FALSE garantiza que los partners existentes (no cargados por el script)
+    no queden marcados.
+    """
+    cur.execute(
+        f"ALTER TABLE {TARGET_TABLE} "
+        f"ADD COLUMN IF NOT EXISTS {DGII_LOADED_FIELD} BOOLEAN DEFAULT FALSE"
+    )
+    log.info("Columna %s.%s garantizada (BOOLEAN DEFAULT FALSE)",
+             TARGET_TABLE, DGII_LOADED_FIELD)
 
 
 def copy_rows_to_staging(cur, rows: Iterable[tuple]) -> int:
@@ -566,6 +592,9 @@ def main() -> int:
     try:
         with conn.cursor() as cur:
             ensure_staging_table(cur)
+            # Garantiza que el campo "Cargado desde DGII" exista en
+            # res_partner antes del upsert (idempotente).
+            ensure_dgii_loaded_column(cur)
 
             # 5) COPY staging
             total_rows = copy_rows_to_staging(
