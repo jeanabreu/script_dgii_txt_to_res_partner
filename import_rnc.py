@@ -82,6 +82,9 @@ DGII_COMMENT_FIELDS = (
 # Marcador del bloque DGII dentro de comment; permite identificar/reemplazar
 # el bloque en re-ejecuciones sin duplicar ni pisar notas del usuario.
 DGII_COMMENT_MARKER = "[DGII]"
+# ID de República Dominicana en `res_country`. Se asigna a todos los
+# partners cargados desde el CSV DGII.
+DGII_COUNTRY_ID = 61
 # Columnas reales del CSV DGII (orden observado en documentación)
 DGII_COLUMNS = (
     "rnc",
@@ -526,6 +529,8 @@ DGII_COMMENT_EXPR = _dgii_comment_sql("s")
 UPDATE_SQL = f"""
 UPDATE {TARGET_TABLE} rp
 SET name              = s.name,
+    complete_name     = s.name,
+    country_id        = {DGII_COUNTRY_ID},
     company_name      = COALESCE(NULLIF(s.commercial_name, ''), rp.company_name),
     comment           = CASE
         WHEN rp.{DGII_LOADED_FIELD} = TRUE THEN rp.comment
@@ -541,12 +546,15 @@ WHERE rp.vat = s.rnc
 
 INSERT_SQL = f"""
 INSERT INTO {TARGET_TABLE}
-    (vat, name, company_name, is_company, active, comment, {DGII_LOADED_FIELD})
+    (vat, name, complete_name, company_name, is_company, active,
+     country_id, comment, {DGII_LOADED_FIELD})
 SELECT s.rnc,
+       s.name,
        s.name,
        NULLIF(s.commercial_name, ''),
        TRUE,
        TRUE,
+       {DGII_COUNTRY_ID},
        {DGII_COMMENT_EXPR},
        TRUE
 FROM {STAGING_TABLE} s
