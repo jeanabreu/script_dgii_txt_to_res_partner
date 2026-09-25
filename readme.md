@@ -18,20 +18,16 @@ estándar de Odoo **`res.partner`**.
    - `UPDATE` de partners existentes cuando `res_partner.vat = staging.rnc`.
    - `INSERT` de partners nuevos (con `is_company = TRUE`).
 
-> **Importante:** la tabla `res_partner` **NO** se trunca — contiene datos de
-> usuario. La importación es **no destructiva**.
-
 ## Mapeo de campos
 
 | DGII (CSV)           | `res.partner`     |
 | -------------------- | ----------------- |
-| `rnc`                | `vat`             |
-| `razon_social`       | `name`            |
-| `commercial_name` *  | `company_name`    |
-| _(implícito)_        | `is_company=TRUE` |
+| `RNC`                | `vat`             |
+| `Razon Social`       | `name`            |
+| `Actividad comercial`| `comment`         |
+| `Inicio Operaciones` | `comment`         |
 
-\* `commercial_name` no viene en el CSV DGII; la columna se conserva en staging
-por compatibilidad/extensión futura.
+\* 'Actividad comercial', 'Inicio Operaciones' y 'Estado' se agregan en al campo 'comment' del modelo res.partner
 
 ## Uso rápido
 
@@ -42,6 +38,13 @@ export PGPORT=5432
 export PGDATABASE=db_test_imp_rnc
 export PGUSER=odoo18
 export PGPASSWORD='dbprd01'
+
+
+# Instalar depedencia
+pip install psycopg2-binary --break-system-packages
+
+# Dar permisos de ejecución a los archivos
+chmod +x import_rnc.sh import_rnc.py
 
 # Ejecutar
 ./import_rnc.sh
@@ -68,9 +71,5 @@ export PGPASSWORD='dbprd01'
 
 ## Notas
 
-- El script usa un `User-Agent` de navegador real porque la DGII devuelve
-  `403 Forbidden` al UA por defecto de `python-requests`.
-- Se valida la firma ZIP (`PK\x03\x04`) y el `Content-Length` para detectar
-  descargas truncadas.
-- Encoding detectado automáticamente entre `utf-8-sig`, `latin-1` y `cp1252`.
 - Dependencias Python: `psycopg2-binary`, `requests`.
+- pip install psycopg2-binary --break-system-packages
